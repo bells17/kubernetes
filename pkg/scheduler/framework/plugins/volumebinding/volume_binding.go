@@ -24,10 +24,13 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/component-helpers/storage/ephemeral"
+	"k8s.io/component-helpers/storage/volume"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config/validation"
@@ -35,6 +38,7 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/feature"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/helper"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/names"
+	"k8s.io/kubernetes/pkg/scheduler/util"
 )
 
 const (
@@ -61,6 +65,11 @@ type stateData struct {
 
 func (d *stateData) Clone() framework.StateData {
 	return d
+}
+
+type pvcInfo struct {
+	pvcName     string
+	isEphemeral bool
 }
 
 // VolumeBinding is a plugin that binds pod volumes in scheduling.
@@ -96,7 +105,7 @@ func (pl *VolumeBinding) EventsToRegister() []framework.ClusterEventWithHint {
 		// Pods may fail because of missing or mis-configured storage class
 		// (e.g., allowedTopologies, volumeBindingMode), and hence may become
 		// schedulable upon StorageClass Add or Update events.
-		{Event: framework.ClusterEvent{Resource: framework.StorageClass, ActionType: framework.Add | framework.Update}},
+		{Event: framework.ClusterEvent{Resource: framework.StorageClass, ActionType: framework.Add | framework.Update}, QueueingHintFn: pl.isSchedulableAfterStorageClassChange},
 		// We bind PVCs with PVs, so any changes may make the pods schedulable.
 		{Event: framework.ClusterEvent{Resource: framework.PersistentVolumeClaim, ActionType: framework.Add | framework.Update}},
 		{Event: framework.ClusterEvent{Resource: framework.PersistentVolume, ActionType: framework.Add | framework.Update}},
@@ -123,32 +132,71 @@ func (pl *VolumeBinding) EventsToRegister() []framework.ClusterEventWithHint {
 	return events
 }
 
+func (pl *VolumeBinding) isSchedulableAfterStorageClassChange(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (framework.QueueingHint, error) {
+	oldSC, newSC, err := util.As[*storagev1.StorageClass](oldObj, newObj)
+	if err != nil {
+		return framework.Queue, err
+	}
+
+	logger = klog.LoggerWithValues(
+		logger,
+		"Pod", klog.KObj(pod),
+		"StorageClass", klog.KObj(newSC),
+	)
+
+	pinfoList := getPVCInfoListFromPodVolumes(pod)
+	for _, pinfo := range pinfoList {
+		pvc, err := pl.PVCLister.PersistentVolumeClaims(pod.Namespace).Get(pinfo.pvcName)
+		if err != nil {
+			if pinfo.isEphemeral && apierrors.IsNotFound(err) {
+				err = fmt.Errorf("waiting for ephemeral volume controller to create the persistentvolumeclaim %q", pinfo.pvcName)
+				return framework.Queue, err
+			}
+			return framework.Queue, err
+		}
+
+		if pvc.Spec.VolumeName != "" {
+			// Skipping the check for CSIStorageCapacity as the PVC is configured
+			// to be bound to an existing PV.
+			continue
+		}
+
+		className := volume.GetPersistentVolumeClaimClass(pvc)
+		if className == newSC.Name {
+			if oldSC == nil {
+				logger.V(4).Info("StorageClass was created")
+				return framework.Queue, nil
+			}
+
+			if !apiequality.Semantic.DeepEqual(newSC.AllowedTopologies, oldSC.AllowedTopologies) {
+				logger.V(4).Info("StorageClass was created or updated, and changed Provisioner", "AllowedTopologies", newSC.AllowedTopologies)
+				return framework.Queue, nil
+			}
+		}
+	}
+
+	logger.V(4).Info("StorageClass was created or updated, but it doesn't make this pod schedulable")
+	return framework.QueueSkip, nil
+}
+
 // podHasPVCs returns 2 values:
 // - the first one to denote if the given "pod" has any PVC defined.
 // - the second one to return any error if the requested PVC is illegal.
 func (pl *VolumeBinding) podHasPVCs(pod *v1.Pod) (bool, error) {
 	hasPVC := false
 	for _, vol := range pod.Spec.Volumes {
-		var pvcName string
-		isEphemeral := false
-		switch {
-		case vol.PersistentVolumeClaim != nil:
-			pvcName = vol.PersistentVolumeClaim.ClaimName
-		case vol.Ephemeral != nil:
-			pvcName = ephemeral.VolumeClaimName(pod, &vol)
-			isEphemeral = true
-		default:
-			// Volume is not using a PVC, ignore
+		pInfo := getPVCInfo(pod, &vol)
+		if pInfo == nil {
 			continue
 		}
 		hasPVC = true
-		pvc, err := pl.PVCLister.PersistentVolumeClaims(pod.Namespace).Get(pvcName)
+		pvc, err := pl.PVCLister.PersistentVolumeClaims(pod.Namespace).Get(pInfo.pvcName)
 		if err != nil {
 			// The error usually has already enough context ("persistentvolumeclaim "myclaim" not found"),
 			// but we can do better for generic ephemeral inline volumes where that situation
 			// is normal directly after creating a pod.
-			if isEphemeral && apierrors.IsNotFound(err) {
-				err = fmt.Errorf("waiting for ephemeral volume controller to create the persistentvolumeclaim %q", pvcName)
+			if pInfo.isEphemeral && apierrors.IsNotFound(err) {
+				err = fmt.Errorf("waiting for ephemeral volume controller to create the persistentvolumeclaim %q", pInfo.pvcName)
 			}
 			return hasPVC, err
 		}
@@ -161,13 +209,40 @@ func (pl *VolumeBinding) podHasPVCs(pod *v1.Pod) (bool, error) {
 			return hasPVC, fmt.Errorf("persistentvolumeclaim %q is being deleted", pvc.Name)
 		}
 
-		if isEphemeral {
+		if pInfo.isEphemeral {
 			if err := ephemeral.VolumeIsForPod(pod, pvc); err != nil {
 				return hasPVC, err
 			}
 		}
 	}
 	return hasPVC, nil
+}
+
+func getPVCInfoListFromPodVolumes(pod *v1.Pod) []*pvcInfo {
+	var pinfoList []*pvcInfo
+	for _, vol := range pod.Spec.Volumes {
+		pinfo := getPVCInfo(pod, &vol)
+		if pinfo != nil {
+			pinfoList = append(pinfoList, pinfo)
+		}
+	}
+	return pinfoList
+}
+
+func getPVCInfo(pod *v1.Pod, vol *v1.Volume) *pvcInfo {
+	switch {
+	case vol.PersistentVolumeClaim != nil:
+		return &pvcInfo{
+			pvcName:     vol.PersistentVolumeClaim.ClaimName,
+			isEphemeral: false,
+		}
+	case vol.Ephemeral != nil:
+		return &pvcInfo{
+			pvcName:     ephemeral.VolumeClaimName(pod, vol),
+			isEphemeral: true,
+		}
+	}
+	return nil
 }
 
 // PreFilter invoked at the prefilter extension point to check if pod has all

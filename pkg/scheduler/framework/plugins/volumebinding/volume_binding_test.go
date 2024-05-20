@@ -890,3 +890,325 @@ func TestVolumeBinding(t *testing.T) {
 		})
 	}
 }
+
+func TestIsSchedulableAfterStorageClassChange(t *testing.T) {
+	table := []struct {
+		name      string
+		pod       *v1.Pod
+		oldSC     interface{}
+		newSC     interface{}
+		pvcLister tf.PersistentVolumeClaimLister
+		err       bool
+		expect    framework.QueueingHint
+	}{
+		{
+			name: "pod has no pvcs",
+			pod:  makePod("pod-a").Pod,
+			oldSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+			},
+			newSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+			},
+			err:    false,
+			expect: framework.QueueSkip,
+		},
+		{
+			name: "pod has no pvc or ephemeral volumes",
+			pod:  makePod("pod-a").withEmptyDirVolume().Pod,
+			oldSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+			},
+			newSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+			},
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			err:    false,
+			expect: framework.QueueSkip,
+		},
+		{
+			name: "pod has pvc volumes with unchanged storage class",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-b",
+				},
+			},
+			newSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-b",
+				},
+			},
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			err:    false,
+			expect: framework.QueueSkip,
+		},
+		{
+			name: "skipping the check for CSIStorageCapacity as the pvc is configured to be bound to an existing pv",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldSC: nil,
+			newSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-b",
+				},
+			},
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-b").withBoundPV("pv-b").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			err:    false,
+			expect: framework.QueueSkip,
+		},
+		{
+			name: "the storage class of the specified by pvc is not found",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+			},
+			newSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+			},
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-notfound").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			err:    false,
+			expect: framework.QueueSkip,
+		},
+		{
+			name: "pod has pvc that references a newly added storage class",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldSC: nil,
+			newSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-b",
+				},
+			},
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			err:    false,
+			expect: framework.Queue,
+		},
+		{
+			name: "pod has pvc volumes with changed storage class: AllowedTopologies",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-b",
+				},
+				AllowedTopologies: []v1.TopologySelectorTerm{
+					{
+						MatchLabelExpressions: []v1.TopologySelectorLabelRequirement{
+							{
+								Key:    "kubernetes.io/hostname",
+								Values: []string{"node1", "node2"},
+							},
+						},
+					},
+				},
+			},
+			newSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-b",
+				},
+				AllowedTopologies: []v1.TopologySelectorTerm{
+					{
+						MatchLabelExpressions: []v1.TopologySelectorLabelRequirement{
+							{
+								Key:    "kubernetes.io/hostname",
+								Values: []string{"node1", "node3"},
+							},
+						},
+					},
+				},
+			},
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			err:    false,
+			expect: framework.Queue,
+		},
+		{
+			name: "pod has ephemeral volume with unchanged storage class: AllowedTopologies",
+			pod:  makePod("pod-a").withGenericEphemeralVolume("ephemeral-a").Pod,
+			oldSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+				AllowedTopologies: []v1.TopologySelectorTerm{
+					{
+						MatchLabelExpressions: []v1.TopologySelectorLabelRequirement{
+							{
+								Key:    "kubernetes.io/hostname",
+								Values: []string{"node1", "node2"},
+							},
+						},
+					},
+				},
+			},
+			newSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+				AllowedTopologies: []v1.TopologySelectorTerm{
+					{
+						MatchLabelExpressions: []v1.TopologySelectorLabelRequirement{
+							{
+								Key:    "kubernetes.io/hostname",
+								Values: []string{"node1", "node3"},
+							},
+						},
+					},
+				},
+			},
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pod-a-ephemeral-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			err:    false,
+			expect: framework.Queue,
+		},
+		{
+			name:   "type conversion error",
+			oldSC:  new(struct{}),
+			newSC:  new(struct{}),
+			err:    true,
+			expect: framework.Queue,
+		},
+		{
+			name: "pod has pvcs but pvc not found",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+				AllowedTopologies: []v1.TopologySelectorTerm{
+					{
+						MatchLabelExpressions: []v1.TopologySelectorLabelRequirement{
+							{
+								Key:    "kubernetes.io/hostname",
+								Values: []string{"node1", "node2"},
+							},
+						},
+					},
+				},
+			},
+			newSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+			},
+			pvcLister: tf.PersistentVolumeClaimLister{},
+			err:       true,
+			expect:    framework.Queue,
+		},
+		{
+			name: "pod has ephemeral volume but pvc not found",
+			pod:  makePod("pod-a").withGenericEphemeralVolume("ephemeral-a").Pod,
+			oldSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+			},
+			newSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+			},
+			pvcLister: tf.PersistentVolumeClaimLister{},
+			err:       true,
+			expect:    framework.Queue,
+		},
+	}
+
+	for _, item := range table {
+		t.Run(item.name, func(t *testing.T) {
+			pl := &VolumeBinding{PVCLister: item.pvcLister}
+			logger, _ := ktesting.NewTestContext(t)
+			qhint, err := pl.isSchedulableAfterStorageClassChange(logger, item.pod, item.oldSC, item.newSC)
+			if (err != nil) != item.err {
+				t.Errorf("isSchedulableAfterStorageClassChange failed - got: %q", err)
+			}
+			if qhint != item.expect {
+				t.Errorf("QHint does not match: %v, want: %v", qhint, item.expect)
+			}
+		})
+	}
+}
