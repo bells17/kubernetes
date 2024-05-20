@@ -890,3 +890,248 @@ func TestVolumeBinding(t *testing.T) {
 		})
 	}
 }
+
+func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
+	table := []struct {
+		name      string
+		pod       *v1.Pod
+		oldPVC    interface{}
+		newPVC    interface{}
+		pvcLister tf.PersistentVolumeClaimLister
+		expect    framework.QueueingHint
+		err       bool
+	}{
+		{
+			name:   "pod has no pvcs",
+			pod:    makePod("pod-a").Pod,
+			expect: framework.QueueSkip,
+			err:    false,
+		},
+		{
+			name:   "pod has no pvc or ephemeral volumes",
+			pod:    makePod("pod-a").withEmptyDirVolume().Pod,
+			oldPVC: makePVC("pvc-b", "sc-a").PersistentVolumeClaim,
+			newPVC: makePVC("pvc-b", "sc-a").PersistentVolumeClaim,
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			err:    false,
+			expect: framework.QueueSkip,
+		},
+		{
+			name: "pod has pvcs with no changes",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldPVC: makePVC("pvc-b", "sc-b").PersistentVolumeClaim,
+			newPVC: makePVC("pvc-b", "sc-b").PersistentVolumeClaim,
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			expect: framework.QueueSkip,
+			err:    false,
+		},
+		{
+			name: "pod has a newly added pvc",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldPVC: nil,
+			newPVC: makePVC("pvc-b", "sc-b").PersistentVolumeClaim,
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			expect: framework.Queue,
+			err:    false,
+		},
+		{
+			name: "pod has pvcs with changed status.phase",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldPVC: makePVC("pvc-a", "sc-b").withPhase(v1.ClaimPending).PersistentVolumeClaim,
+			newPVC: makePVC("pvc-a", "sc-b").withPhase(v1.ClaimBound).PersistentVolumeClaim,
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			expect: framework.Queue,
+			err:    false,
+		},
+		{
+			name:   "pod has ephemeral volume with changed status.phase",
+			pod:    makePod("pod-a").withGenericEphemeralVolume("ephemeral-a").Pod,
+			oldPVC: makePVC("pod-a-ephemeral-a", "sc-a").withPhase(v1.ClaimPending).PersistentVolumeClaim,
+			newPVC: makePVC("pod-a-ephemeral-a", "sc-a").withPhase(v1.ClaimBound).PersistentVolumeClaim,
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pod-a-ephemeral-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			expect: framework.Queue,
+			err:    false,
+		},
+		{
+			name: "pod has pvcs with changed annotations",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldPVC: func() *v1.PersistentVolumeClaim {
+				pvc := makePVC("pvc-b", "sc-a").PersistentVolumeClaim
+				pvc.Annotations = map[string]string{
+					"volume.beta.kubernetes.io/sample-ann": "sample-value1",
+				}
+				return pvc
+			}(),
+			newPVC: func() *v1.PersistentVolumeClaim {
+				pvc := makePVC("pvc-b", "sc-a").PersistentVolumeClaim
+				pvc.Annotations = map[string]string{
+					"volume.beta.kubernetes.io/sample-ann": "sample-value2",
+				}
+				return pvc
+			}(),
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			expect: framework.Queue,
+			err:    false,
+		},
+		{
+			name: "pod has ephemeral volume with changed annotations",
+			pod:  makePod("pod-a").withGenericEphemeralVolume("ephemeral-a").Pod,
+			oldPVC: func() *v1.PersistentVolumeClaim {
+				pvc := makePVC("pod-a-ephemeral-a", "sc-a").PersistentVolumeClaim
+				pvc.Annotations = map[string]string{
+					"volume.beta.kubernetes.io/sample-ann": "sample-value1",
+				}
+				return pvc
+			}(),
+			newPVC: func() *v1.PersistentVolumeClaim {
+				pvc := makePVC("pod-a-ephemeral-a", "sc-a").PersistentVolumeClaim
+				pvc.Annotations = map[string]string{
+					"volume.beta.kubernetes.io/sample-ann": "sample-value2",
+				}
+				return pvc
+			}(),
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pod-a-ephemeral-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			expect: framework.Queue,
+			err:    false,
+		},
+		{
+			name: "pod has pvcs with changed spec",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldPVC: func() *v1.PersistentVolumeClaim {
+				pvc := makePVC("pvc-b", "sc-a").PersistentVolumeClaim
+				pvc.Spec.AccessModes = []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce}
+				return pvc
+			}(),
+			newPVC: func() *v1.PersistentVolumeClaim {
+				pvc := makePVC("pvc-b", "sc-a").PersistentVolumeClaim
+				pvc.Spec.AccessModes = []v1.PersistentVolumeAccessMode{v1.ReadWriteOncePod}
+				return pvc
+			}(),
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			expect: framework.Queue,
+			err:    false,
+		},
+		{
+			name: "pod has ephemeral volume with changed spec",
+			pod:  makePod("pod-a").withGenericEphemeralVolume("ephemeral-a").Pod,
+			oldPVC: func() *v1.PersistentVolumeClaim {
+				pvc := makePVC("pod-a-ephemeral-a", "sc-a").PersistentVolumeClaim
+				pvc.Spec.AccessModes = []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce}
+				return pvc
+			}(),
+			newPVC: func() *v1.PersistentVolumeClaim {
+				pvc := makePVC("pod-a-ephemeral-a", "sc-a").PersistentVolumeClaim
+				pvc.Spec.AccessModes = []v1.PersistentVolumeAccessMode{v1.ReadWriteOncePod}
+				return pvc
+			}(),
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pod-a-ephemeral-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			expect: framework.Queue,
+			err:    false,
+		},
+		{
+			name:   "type conversion error",
+			oldPVC: new(struct{}),
+			newPVC: new(struct{}),
+			err:    true,
+			expect: framework.Queue,
+		},
+	}
+
+	for _, item := range table {
+		t.Run(item.name, func(t *testing.T) {
+			pl := &VolumeBinding{PVCLister: item.pvcLister}
+			logger, _ := ktesting.NewTestContext(t)
+			qhint, err := pl.isSchedulableAfterPersistentVolumeClaimChange(logger, item.pod, item.oldPVC, item.newPVC)
+			if (err != nil) != item.err {
+				t.Errorf("isSchedulableAfterPersistentVolumeClaimChange failed - got: %q", err)
+			}
+			if qhint != item.expect {
+				t.Errorf("QHint does not match: %v, want: %v", qhint, item.expect)
+			}
+		})
+	}
+}
