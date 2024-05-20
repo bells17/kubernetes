@@ -893,15 +893,14 @@ func TestVolumeBinding(t *testing.T) {
 
 func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 	table := []struct {
-		name           string
-		pod            *v1.Pod
-		sc             *storagev1.StorageClass
-		oldCap         *storagev1.CSIStorageCapacity
-		newCap         *storagev1.CSIStorageCapacity
-		pvcLister      tf.PersistentVolumeClaimLister
-		useEmptyStruct bool
-		err            bool
-		expect         framework.QueueingHint
+		name      string
+		pod       *v1.Pod
+		sc        *storagev1.StorageClass
+		oldCap    interface{}
+		newCap    interface{}
+		pvcLister tf.PersistentVolumeClaimLister
+		err       bool
+		expect    framework.QueueingHint
 	}{
 		{
 			name: "pod has no pvcs",
@@ -1100,10 +1099,11 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 			expect: framework.Queue,
 		},
 		{
-			name:           "type conversion error",
-			useEmptyStruct: true,
-			err:            true,
-			expect:         framework.Queue,
+			name:   "type conversion error",
+			oldCap: new(struct{}),
+			newCap: new(struct{}),
+			err:    true,
+			expect: framework.Queue,
 		},
 		{
 			name: "pod has pvcs but pvc not found",
@@ -1177,15 +1177,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 		t.Run(item.name, func(t *testing.T) {
 			pl := &VolumeBinding{PVCLister: item.pvcLister}
 			logger, _ := ktesting.NewTestContext(t)
-
-			var qhint framework.QueueingHint
-			var err error
-			if item.useEmptyStruct {
-				qhint, err = pl.isSchedulableAfterCSIStorageCapacityChange(logger, item.pod, new(struct{}), new(struct{}))
-			} else {
-				qhint, err = pl.isSchedulableAfterCSIStorageCapacityChange(logger, item.pod, item.oldCap, item.newCap)
-			}
-
+			qhint, err := pl.isSchedulableAfterCSIStorageCapacityChange(logger, item.pod, item.oldCap, item.newCap)
 			if (item.err && err == nil) || (!item.err && err != nil) {
 				t.Errorf("isSchedulableAfterCSIStorageCapacityChange failed - got: %q", err)
 			}
