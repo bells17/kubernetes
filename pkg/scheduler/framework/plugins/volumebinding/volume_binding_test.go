@@ -1178,7 +1178,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 			pl := &VolumeBinding{PVCLister: item.pvcLister}
 			logger, _ := ktesting.NewTestContext(t)
 			qhint, err := pl.isSchedulableAfterCSIStorageCapacityChange(logger, item.pod, item.oldCap, item.newCap)
-			if (item.err && err == nil) || (!item.err && err != nil) {
+			if (err != nil) != item.err {
 				t.Errorf("isSchedulableAfterCSIStorageCapacityChange failed - got: %q", err)
 			}
 			if qhint != item.expect {
