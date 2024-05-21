@@ -904,6 +904,8 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 		{
 			name:   "pod has no pvcs",
 			pod:    makePod("pod-a").Pod,
+			oldPVC: makePVC("pvc-b", "sc-a").PersistentVolumeClaim,
+			newPVC: makePVC("pvc-b", "sc-a").PersistentVolumeClaim,
 			expect: framework.QueueSkip,
 			err:    false,
 		},
@@ -932,6 +934,28 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 				withPVCVolume("pvc-b", "").
 				Pod,
 			oldPVC: makePVC("pvc-b", "sc-b").PersistentVolumeClaim,
+			newPVC: makePVC("pvc-b", "sc-b").PersistentVolumeClaim,
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			expect: framework.QueueSkip,
+			err:    false,
+		},
+		{
+			name: "pvc with the same name as the one used by the pod in a different namespace is modified",
+			pod: makePod("pod-a").
+				withNamespace("ns-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldPVC: nil,
 			newPVC: makePVC("pvc-b", "sc-b").PersistentVolumeClaim,
 			pvcLister: tf.PersistentVolumeClaimLister{
 				func() v1.PersistentVolumeClaim {

@@ -137,6 +137,11 @@ func (pl *VolumeBinding) isSchedulableAfterPersistentVolumeClaimChange(logger kl
 		"PersistentVolumeClaim", klog.KObj(newPVC),
 	)
 
+	if pod.Namespace != newPVC.Namespace {
+		logger.V(4).Info("PersistentVolumeClaim was created or updated, but it doesn't make this pod schedulable")
+		return framework.QueueSkip, nil
+	}
+
 	result, err := processPodVolumesForQHint(pod, func(pvcName string, isEphemeral bool) (bool, error) {
 		if pvcName == newPVC.Name {
 			if oldPVC == nil {
