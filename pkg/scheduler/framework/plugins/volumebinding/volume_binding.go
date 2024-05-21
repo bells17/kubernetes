@@ -65,6 +65,11 @@ func (d *stateData) Clone() framework.StateData {
 	return d
 }
 
+type pvcInfo struct {
+	pvcName     string
+	isEphemeral bool
+}
+
 // VolumeBinding is a plugin that binds pod volumes in scheduling.
 // In the Filter phase, pod binding cache is created for the pod and used in
 // Reserve and PreBind phases.
@@ -142,59 +147,33 @@ func (pl *VolumeBinding) isSchedulableAfterPersistentVolumeClaimChange(logger kl
 		return framework.QueueSkip, nil
 	}
 
-	result, err := processPodVolumesForQHint(pod, func(pvcName string, isEphemeral bool) (bool, error) {
-		if pvcName == newPVC.Name {
+	pinfoList := getPVCInfoListFromPodVolumes(pod)
+	for _, pinfo := range pinfoList {
+		if pinfo.pvcName == newPVC.Name {
 			if oldPVC == nil {
 				logger.V(4).Info("PersistentVolumeClaim was created")
-				return true, nil
+				return framework.Queue, nil
 			}
 
 			if newPVC.Status.Phase != oldPVC.Status.Phase {
 				logger.V(4).Info("PersistentVolumeClaim referenced by the Pod was created or updated, and changed Provisioner", "Phase", newPVC.Status.Phase)
-				return true, nil
+				return framework.Queue, nil
 			}
 
 			if !apiequality.Semantic.DeepEqual(newPVC.Annotations, oldPVC.Annotations) {
 				logger.V(4).Info("PersistentVolumeClaim referenced by the Pod was created or updated, and changed Annotations")
-				return true, nil
+				return framework.Queue, nil
 			}
 
 			if !apiequality.Semantic.DeepEqual(newPVC.Spec, oldPVC.Spec) {
 				logger.V(4).Info("PersistentVolumeClaim referenced by the Pod was created or updated, and changed Spec")
-				return true, nil
+				return framework.Queue, nil
 			}
 		}
-
-		return false, nil
-	})
-
-	if err != nil {
-		return framework.Queue, err
-	}
-
-	if result {
-		return framework.Queue, nil
 	}
 
 	logger.V(4).Info("PersistentVolumeClaim was created or updated, but it doesn't make this pod schedulable")
 	return framework.QueueSkip, nil
-}
-
-func processPodVolumesForQHint(pod *v1.Pod, fn func(string, bool) (bool, error)) (bool, error) {
-	for _, vol := range pod.Spec.Volumes {
-		hasPVC, pvcName, isEphemeral := getVolumeClaimName(pod, &vol)
-		if !hasPVC {
-			continue
-		}
-		result, err := fn(pvcName, isEphemeral)
-		if err != nil {
-			return false, err
-		}
-		if result {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // podHasPVCs returns 2 values:
@@ -203,18 +182,18 @@ func processPodVolumesForQHint(pod *v1.Pod, fn func(string, bool) (bool, error))
 func (pl *VolumeBinding) podHasPVCs(pod *v1.Pod) (bool, error) {
 	hasPVC := false
 	for _, vol := range pod.Spec.Volumes {
-		hasPVC2, pvcName, isEphemeral := getVolumeClaimName(pod, &vol)
-		if !hasPVC2 {
+		pInfo := getPVCInfo(pod, &vol)
+		if pInfo == nil {
 			continue
 		}
 		hasPVC = true
-		pvc, err := pl.PVCLister.PersistentVolumeClaims(pod.Namespace).Get(pvcName)
+		pvc, err := pl.PVCLister.PersistentVolumeClaims(pod.Namespace).Get(pInfo.pvcName)
 		if err != nil {
 			// The error usually has already enough context ("persistentvolumeclaim "myclaim" not found"),
 			// but we can do better for generic ephemeral inline volumes where that situation
 			// is normal directly after creating a pod.
-			if isEphemeral && apierrors.IsNotFound(err) {
-				err = fmt.Errorf("waiting for ephemeral volume controller to create the persistentvolumeclaim %q", pvcName)
+			if pInfo.isEphemeral && apierrors.IsNotFound(err) {
+				err = fmt.Errorf("waiting for ephemeral volume controller to create the persistentvolumeclaim %q", pInfo.pvcName)
 			}
 			return hasPVC, err
 		}
@@ -227,7 +206,7 @@ func (pl *VolumeBinding) podHasPVCs(pod *v1.Pod) (bool, error) {
 			return hasPVC, fmt.Errorf("persistentvolumeclaim %q is being deleted", pvc.Name)
 		}
 
-		if isEphemeral {
+		if pInfo.isEphemeral {
 			if err := ephemeral.VolumeIsForPod(pod, pvc); err != nil {
 				return hasPVC, err
 			}
@@ -236,14 +215,31 @@ func (pl *VolumeBinding) podHasPVCs(pod *v1.Pod) (bool, error) {
 	return hasPVC, nil
 }
 
-func getVolumeClaimName(pod *v1.Pod, vol *v1.Volume) (bool, string, bool) {
+func getPVCInfoListFromPodVolumes(pod *v1.Pod) []*pvcInfo {
+	var pinfoList []*pvcInfo
+	for _, vol := range pod.Spec.Volumes {
+		pinfo := getPVCInfo(pod, &vol)
+		if pinfo != nil {
+			pinfoList = append(pinfoList, pinfo)
+		}
+	}
+	return pinfoList
+}
+
+func getPVCInfo(pod *v1.Pod, vol *v1.Volume) *pvcInfo {
 	switch {
 	case vol.PersistentVolumeClaim != nil:
-		return true, vol.PersistentVolumeClaim.ClaimName, false
+		return &pvcInfo{
+			pvcName:     vol.PersistentVolumeClaim.ClaimName,
+			isEphemeral: false,
+		}
 	case vol.Ephemeral != nil:
-		return true, ephemeral.VolumeClaimName(pod, vol), true
+		return &pvcInfo{
+			pvcName:     ephemeral.VolumeClaimName(pod, vol),
+			isEphemeral: true,
+		}
 	}
-	return false, "", false
+	return nil
 }
 
 // PreFilter invoked at the prefilter extension point to check if pod has all
