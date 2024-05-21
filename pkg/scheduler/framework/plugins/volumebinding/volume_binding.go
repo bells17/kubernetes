@@ -154,11 +154,13 @@ func (pl *VolumeBinding) isSchedulableAfterCSIStorageCapacityChange(logger klog.
 			return framework.Queue, err
 		}
 
-		className := volume.GetPersistentVolumeClaimClass(pvc)
-		if className == "" {
-			return framework.Queue, fmt.Errorf("no class for claim %q", pinfo.pvcName)
+		if pvc.Spec.VolumeName != "" {
+			// Skipping the check for CSIStorageCapacity as the PVC is configured
+			// to be bound to an existing PV.
+			continue
 		}
 
+		className := volume.GetPersistentVolumeClaimClass(pvc)
 		if newCap.StorageClassName == className {
 			if oldCap == nil {
 				logger.V(4).Info("CSIStorageCapacity was created")

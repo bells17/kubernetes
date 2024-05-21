@@ -23,6 +23,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
+
 	v1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -970,6 +971,61 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 			expect: framework.QueueSkip,
 		},
 		{
+			name: "skipping the check for CSIStorageCapacity as the pvc is configured to be bound to an existing pv",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldCap: nil,
+			newCap: &storagev1.CSIStorageCapacity{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "cap-a",
+				},
+				StorageClassName: "sc-b",
+			},
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-b").withBoundPV("pv-b").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			err:    false,
+			expect: framework.QueueSkip,
+		},
+		{
+			name: "the storage class of the specified by pvc is not found",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withPVCVolume("pvc-b", "").
+				Pod,
+			oldCap: &storagev1.CSIStorageCapacity{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+			},
+			newCap: &storagev1.CSIStorageCapacity{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+			},
+			pvcLister: tf.PersistentVolumeClaimLister{
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
+					return *pvc
+				}(),
+				func() v1.PersistentVolumeClaim {
+					pvc := makePVC("pvc-b", "sc-notfound").PersistentVolumeClaim
+					return *pvc
+				}(),
+			},
+			err:    false,
+			expect: framework.QueueSkip,
+		},
+		{
 			name: "pod has pvc that references a newly added CSIStorageCapacity",
 			pod: makePod("pod-a").
 				withPVCVolume("pvc-a", "").
@@ -1141,35 +1197,6 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 			pvcLister: tf.PersistentVolumeClaimLister{},
 			err:       true,
 			expect:    framework.Queue,
-		},
-		{
-			name: "pvc does not specify a storage class",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
-			oldCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-a",
-				},
-			},
-			newCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-a",
-				},
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-b", "sc-notfound").PersistentVolumeClaim
-					return *pvc
-				}(),
-			},
-			err:    false,
-			expect: framework.QueueSkip,
 		},
 	}
 
