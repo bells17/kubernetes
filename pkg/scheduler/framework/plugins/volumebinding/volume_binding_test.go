@@ -1052,6 +1052,42 @@ func TestIsSchedulableAfterStorageClassChange(t *testing.T) {
 			expect: framework.Queue,
 		},
 		{
+			name: "pod has ephemeral volume that references a newly added storage class",
+			pod: func() *v1.Pod {
+				pod := makePod("pod-a").Pod
+				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+					Name: "ephemeral-a",
+					VolumeSource: v1.VolumeSource{
+						Ephemeral: &v1.EphemeralVolumeSource{
+							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
+								Spec: makePVC("pod-a-ephemeral-a", "sc-0").PersistentVolumeClaim.Spec,
+							},
+						},
+					},
+				})
+				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+					Name: "ephemeral-b",
+					VolumeSource: v1.VolumeSource{
+						Ephemeral: &v1.EphemeralVolumeSource{
+							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
+								Spec: makePVC("pod-a-ephemeral-b", "sc-a").PersistentVolumeClaim.Spec,
+							},
+						},
+					},
+				})
+				return pod
+			}(),
+			oldSC: nil,
+			newSC: &storagev1.StorageClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "sc-a",
+				},
+			},
+			pvcLister: tf.PersistentVolumeClaimLister{},
+			err:       false,
+			expect:    framework.Queue,
+		},
+		{
 			name: "pod has pvc volumes with changed storage class: AllowedTopologies",
 			pod: makePod("pod-a").
 				withPVCVolume("pvc-a", "").
@@ -1101,8 +1137,31 @@ func TestIsSchedulableAfterStorageClassChange(t *testing.T) {
 			expect: framework.Queue,
 		},
 		{
-			name: "pod has ephemeral volume with unchanged storage class: AllowedTopologies",
-			pod:  makePod("pod-a").withGenericEphemeralVolume("ephemeral-a").Pod,
+			name: "pod has ephemeral volumes with changed storage class: AllowedTopologies",
+			pod: func() *v1.Pod {
+				pod := makePod("pod-a").Pod
+				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+					Name: "ephemeral-a",
+					VolumeSource: v1.VolumeSource{
+						Ephemeral: &v1.EphemeralVolumeSource{
+							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
+								Spec: makePVC("pod-a-ephemeral-a", "sc-0").PersistentVolumeClaim.Spec,
+							},
+						},
+					},
+				})
+				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
+					Name: "ephemeral-b",
+					VolumeSource: v1.VolumeSource{
+						Ephemeral: &v1.EphemeralVolumeSource{
+							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
+								Spec: makePVC("pod-a-ephemeral-b", "sc-a").PersistentVolumeClaim.Spec,
+							},
+						},
+					},
+				})
+				return pod
+			}(),
 			oldSC: &storagev1.StorageClass{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "sc-a",
@@ -1150,7 +1209,7 @@ func TestIsSchedulableAfterStorageClassChange(t *testing.T) {
 			expect: framework.Queue,
 		},
 		{
-			name: "pod has pvcs but pvc not found",
+			name: "pod has pvcs but these pvc not found",
 			pod: makePod("pod-a").
 				withPVCVolume("pvc-a", "").
 				withPVCVolume("pvc-b", "").
@@ -1168,23 +1227,6 @@ func TestIsSchedulableAfterStorageClassChange(t *testing.T) {
 							},
 						},
 					},
-				},
-			},
-			newSC: &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-a",
-				},
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{},
-			err:       true,
-			expect:    framework.Queue,
-		},
-		{
-			name: "pod has ephemeral volume but pvc not found",
-			pod:  makePod("pod-a").withGenericEphemeralVolume("ephemeral-a").Pod,
-			oldSC: &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-a",
 				},
 			},
 			newSC: &storagev1.StorageClass{
