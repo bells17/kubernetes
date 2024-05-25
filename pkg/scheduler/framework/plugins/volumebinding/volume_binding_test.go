@@ -898,16 +898,16 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 		oldPVC    interface{}
 		newPVC    interface{}
 		pvcLister tf.PersistentVolumeClaimLister
-		expect    framework.QueueingHint
 		err       bool
+		expect    framework.QueueingHint
 	}{
 		{
 			name:   "pod has no pvcs",
 			pod:    makePod("pod-a").Pod,
 			oldPVC: makePVC("pvc-b", "sc-a").PersistentVolumeClaim,
 			newPVC: makePVC("pvc-b", "sc-a").PersistentVolumeClaim,
-			expect: framework.QueueSkip,
 			err:    false,
+			expect: framework.QueueSkip,
 		},
 		{
 			name:   "pod has no pvc or ephemeral volumes",
@@ -945,8 +945,8 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 					return *pvc
 				}(),
 			},
-			expect: framework.QueueSkip,
 			err:    false,
+			expect: framework.QueueSkip,
 		},
 		{
 			name: "pvc with the same name as the one used by the pod in a different namespace is modified",
@@ -967,8 +967,8 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 					return *pvc
 				}(),
 			},
-			expect: framework.QueueSkip,
 			err:    false,
+			expect: framework.QueueSkip,
 		},
 		{
 			name: "pod has a newly added pvc",
@@ -988,8 +988,8 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 					return *pvc
 				}(),
 			},
-			expect: framework.Queue,
 			err:    false,
+			expect: framework.Queue,
 		},
 		{
 			name: "pod has pvcs with changed status.phase",
@@ -1009,8 +1009,8 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 					return *pvc
 				}(),
 			},
-			expect: framework.Queue,
 			err:    false,
+			expect: framework.Queue,
 		},
 		{
 			name:   "pod has ephemeral volume with changed status.phase",
@@ -1023,8 +1023,8 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 					return *pvc
 				}(),
 			},
-			expect: framework.Queue,
 			err:    false,
+			expect: framework.Queue,
 		},
 		{
 			name: "pod has pvcs with changed annotations",
@@ -1056,8 +1056,8 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 					return *pvc
 				}(),
 			},
-			expect: framework.Queue,
 			err:    false,
+			expect: framework.Queue,
 		},
 		{
 			name: "pod has ephemeral volume with changed annotations",
@@ -1082,8 +1082,8 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 					return *pvc
 				}(),
 			},
-			expect: framework.Queue,
 			err:    false,
+			expect: framework.Queue,
 		},
 		{
 			name: "pod has pvcs with changed spec",
@@ -1111,8 +1111,8 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 					return *pvc
 				}(),
 			},
-			expect: framework.Queue,
 			err:    false,
+			expect: framework.Queue,
 		},
 		{
 			name: "pod has ephemeral volume with changed spec",
@@ -1133,8 +1133,8 @@ func TestIsSchedulableAfterPersistentVolumeClaimChange(t *testing.T) {
 					return *pvc
 				}(),
 			},
-			expect: framework.Queue,
 			err:    false,
+			expect: framework.Queue,
 		},
 		{
 			name:   "type conversion error",
