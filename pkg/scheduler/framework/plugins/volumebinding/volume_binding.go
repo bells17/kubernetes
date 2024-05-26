@@ -29,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/component-helpers/storage/ephemeral"
-	"k8s.io/component-helpers/storage/volume"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config/validation"
@@ -127,7 +126,7 @@ func (pl *VolumeBinding) EventsToRegister() []framework.ClusterEventWithHint {
 }
 
 func (pl *VolumeBinding) isSchedulableAfterCSIStorageCapacityChange(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (framework.QueueingHint, error) {
-	oldCap, newCap, err := util.As[*storagev1.CSIStorageCapacity](oldObj, newObj)
+	_, newCap, err := util.As[*storagev1.CSIStorageCapacity](oldObj, newObj)
 	if err != nil {
 		return framework.Queue, err
 	}
@@ -139,49 +138,14 @@ func (pl *VolumeBinding) isSchedulableAfterCSIStorageCapacityChange(logger klog.
 	)
 
 	for _, vol := range pod.Spec.Volumes {
-		var pvc *v1.PersistentVolumeClaim
-		switch {
-		case vol.PersistentVolumeClaim != nil:
-			pvcName := vol.PersistentVolumeClaim.ClaimName
-			pvc, err = pl.PVCLister.PersistentVolumeClaims(pod.Namespace).Get(pvcName)
-			if err != nil {
-				return framework.Queue, err
-			}
-		case vol.Ephemeral != nil:
-			pvc = &v1.PersistentVolumeClaim{
-				ObjectMeta: vol.Ephemeral.VolumeClaimTemplate.ObjectMeta,
-				Spec:       vol.Ephemeral.VolumeClaimTemplate.Spec,
-			}
-		default:
-			continue
-		}
-
-		if pvc.Spec.VolumeName != "" {
-			// Skipping the check for CSIStorageCapacity as the PVC is configured
-			// to be bound to an existing PV.
-			continue
-		}
-
-		className := volume.GetPersistentVolumeClaimClass(pvc)
-		if newCap.StorageClassName == className {
-			if oldCap == nil {
-				logger.V(4).Info("CSIStorageCapacity was created")
-				return framework.Queue, nil
-			}
-
-			if newCap.Capacity != oldCap.Capacity {
-				logger.V(4).Info("CSIStorageCapacity referenced by the Pod was created or updated, and changed Capacity", "Capacity", newCap.Capacity)
-				return framework.Queue, nil
-			}
-
-			if newCap.MaximumVolumeSize != oldCap.MaximumVolumeSize {
-				logger.V(4).Info("CSIStorageCapacity referenced by the Pod was created or updated, and changed MaximumVolumeSize", "MaximumVolumeSize", newCap.MaximumVolumeSize)
-				return framework.Queue, nil
-			}
+		if vol.PersistentVolumeClaim != nil || vol.Ephemeral != nil {
+			// This Pod might have got unschedulable due to CSIStorageCapacity in a past scheduling cycle.
+			logger.V(5).Info("CSIStorageCapacity was created or updated, potentially making the target Pod schedulable")
+			return framework.Queue, nil
 		}
 	}
 
-	logger.V(4).Info("CSIStorageCapacity was created or updated, but it doesn't make this pod schedulable")
+	logger.V(5).Info("CSIStorageCapacity was created or updated, but it doesn't make this pod schedulable")
 	return framework.QueueSkip, nil
 }
 

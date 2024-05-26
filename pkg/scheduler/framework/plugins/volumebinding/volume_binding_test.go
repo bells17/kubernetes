@@ -894,35 +894,15 @@ func TestVolumeBinding(t *testing.T) {
 
 func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 	table := []struct {
-		name      string
-		pod       *v1.Pod
-		sc        *storagev1.StorageClass
-		oldCap    interface{}
-		newCap    interface{}
-		pvcLister tf.PersistentVolumeClaimLister
-		err       bool
-		expect    framework.QueueingHint
+		name   string
+		pod    *v1.Pod
+		oldCap interface{}
+		newCap interface{}
+		err    bool
+		expect framework.QueueingHint
 	}{
 		{
-			name: "pod has no pvcs",
-			pod:  makePod("pod-a").Pod,
-			oldCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cap-a",
-				},
-				StorageClassName: "sc-a",
-			},
-			newCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cap-a",
-				},
-				StorageClassName: "sc-a",
-			},
-			err:    false,
-			expect: framework.QueueSkip,
-		},
-		{
-			name: "pod has no pvc or ephemeral volumes",
+			name: "pod has no pvc or generic ephemeral volumes",
 			pod:  makePod("pod-a").withEmptyDirVolume().Pod,
 			oldCap: &storagev1.CSIStorageCapacity{
 				ObjectMeta: metav1.ObjectMeta{
@@ -940,331 +920,40 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 			expect: framework.QueueSkip,
 		},
 		{
-			name: "pod has pvcs with no CSIStorageCapacity changes",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
+			name: "pod has one or more pvcs",
+			pod:  makePod("pod-a").withPVCVolume("pvc-a", "").Pod,
 			oldCap: &storagev1.CSIStorageCapacity{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "cap-a",
 				},
-				StorageClassName: "sc-b",
+				StorageClassName: "sc-a",
 			},
 			newCap: &storagev1.CSIStorageCapacity{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "cap-a",
 				},
 				StorageClassName: "sc-b",
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
-					return *pvc
-				}(),
-			},
-			err:    false,
-			expect: framework.QueueSkip,
-		},
-		{
-			name: "skipping the check for CSIStorageCapacity as the pvc is configured to be bound to an existing pv",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
-			oldCap: nil,
-			newCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cap-a",
-				},
-				StorageClassName: "sc-b",
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-b", "sc-b").withBoundPV("pv-b").PersistentVolumeClaim
-					return *pvc
-				}(),
-			},
-			err:    false,
-			expect: framework.QueueSkip,
-		},
-		{
-			name: "the storage class of the specified by pvc is not found",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
-			oldCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-a",
-				},
-			},
-			newCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-a",
-				},
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-b", "sc-notfound").PersistentVolumeClaim
-					return *pvc
-				}(),
-			},
-			err:    false,
-			expect: framework.QueueSkip,
-		},
-		{
-			name: "pod has pvc that references a newly added CSIStorageCapacity",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
-			oldCap: nil,
-			newCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cap-a",
-				},
-				StorageClassName: "sc-b",
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
-					return *pvc
-				}(),
 			},
 			err:    false,
 			expect: framework.Queue,
 		},
 		{
-			name: "pod has ephemeral volume that references a newly added CSIStorageCapacity",
-			pod: func() *v1.Pod {
-				pod := makePod("pod-a").Pod
-				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-					Name: "ephemeral-a",
-					VolumeSource: v1.VolumeSource{
-						Ephemeral: &v1.EphemeralVolumeSource{
-							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
-								Spec: makePVC("pod-a-ephemeral-a", "sc-0").PersistentVolumeClaim.Spec,
-							},
-						},
-					},
-				})
-				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-					Name: "ephemeral-b",
-					VolumeSource: v1.VolumeSource{
-						Ephemeral: &v1.EphemeralVolumeSource{
-							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
-								Spec: makePVC("pod-a-ephemeral-b", "sc-a").PersistentVolumeClaim.Spec,
-							},
-						},
-					},
-				})
-				return pod
-			}(),
-			oldCap: nil,
-			newCap: &storagev1.CSIStorageCapacity{
+			name: "pod has one or more generic ephemeral volumes",
+			pod:  makePod("pod-a").withGenericEphemeralVolume("ephemeral-a").Pod,
+			oldCap: &storagev1.CSIStorageCapacity{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "cap-a",
 				},
 				StorageClassName: "sc-a",
 			},
-			pvcLister: tf.PersistentVolumeClaimLister{},
-			err:       false,
-			expect:    framework.Queue,
-		},
-		{
-			name: "pod has pvc with changed CSIStorageCapacity.Capacity",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
-			oldCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cap-a",
-				},
-				StorageClassName: "sc-b",
-				Capacity: func() *resource.Quantity {
-					qty := resource.MustParse("1Gi")
-					return &qty
-				}(),
-			},
 			newCap: &storagev1.CSIStorageCapacity{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "cap-a",
 				},
 				StorageClassName: "sc-b",
-				Capacity: func() *resource.Quantity {
-					qty := resource.MustParse("2Gi")
-					return &qty
-				}(),
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
-					return *pvc
-				}(),
 			},
 			err:    false,
 			expect: framework.Queue,
-		},
-		{
-			name: "pod has ephemeral volume with changed CSIStorageCapacity.Capacity",
-			pod: func() *v1.Pod {
-				pod := makePod("pod-a").Pod
-				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-					Name: "ephemeral-a",
-					VolumeSource: v1.VolumeSource{
-						Ephemeral: &v1.EphemeralVolumeSource{
-							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
-								Spec: makePVC("pod-a-ephemeral-a", "sc-0").PersistentVolumeClaim.Spec,
-							},
-						},
-					},
-				})
-				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-					Name: "ephemeral-b",
-					VolumeSource: v1.VolumeSource{
-						Ephemeral: &v1.EphemeralVolumeSource{
-							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
-								Spec: makePVC("pod-a-ephemeral-b", "sc-a").PersistentVolumeClaim.Spec,
-							},
-						},
-					},
-				})
-				return pod
-			}(),
-			oldCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cap-a",
-				},
-				StorageClassName: "sc-a",
-				Capacity: func() *resource.Quantity {
-					qty := resource.MustParse("1Gi")
-					return &qty
-				}(),
-			},
-			newCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cap-a",
-				},
-				StorageClassName: "sc-a",
-				Capacity: func() *resource.Quantity {
-					qty := resource.MustParse("2Gi")
-					return &qty
-				}(),
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{},
-			err:       false,
-			expect:    framework.Queue,
-		},
-		{
-			name: "pod has pvc with changed CSIStorageCapacity.MaximumVolumeSize",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
-			oldCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cap-a",
-				},
-				StorageClassName: "sc-b",
-				MaximumVolumeSize: func() *resource.Quantity {
-					qty := resource.MustParse("1Gi")
-					return &qty
-				}(),
-			},
-			newCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cap-a",
-				},
-				StorageClassName: "sc-b",
-				MaximumVolumeSize: func() *resource.Quantity {
-					qty := resource.MustParse("2Gi")
-					return &qty
-				}(),
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
-					return *pvc
-				}(),
-			},
-			err:    false,
-			expect: framework.Queue,
-		},
-		{
-			name: "pod has ephemeral volume with changed CSIStorageCapacity.MaximumVolumeSize",
-			pod: func() *v1.Pod {
-				pod := makePod("pod-a").Pod
-				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-					Name: "ephemeral-a",
-					VolumeSource: v1.VolumeSource{
-						Ephemeral: &v1.EphemeralVolumeSource{
-							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
-								Spec: makePVC("pod-a-ephemeral-a", "sc-0").PersistentVolumeClaim.Spec,
-							},
-						},
-					},
-				})
-				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-					Name: "ephemeral-b",
-					VolumeSource: v1.VolumeSource{
-						Ephemeral: &v1.EphemeralVolumeSource{
-							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
-								Spec: makePVC("pod-a-ephemeral-b", "sc-a").PersistentVolumeClaim.Spec,
-							},
-						},
-					},
-				})
-				return pod
-			}(),
-			oldCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cap-a",
-				},
-				StorageClassName: "sc-a",
-				MaximumVolumeSize: func() *resource.Quantity {
-					qty := resource.MustParse("1Gi")
-					return &qty
-				}(),
-			},
-			newCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cap-a",
-				},
-				StorageClassName: "sc-a",
-				MaximumVolumeSize: func() *resource.Quantity {
-					qty := resource.MustParse("2Gi")
-					return &qty
-				}(),
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{},
-			err:       false,
-			expect:    framework.Queue,
 		},
 		{
 			name:   "type conversion error",
@@ -1273,31 +962,11 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 			err:    true,
 			expect: framework.Queue,
 		},
-		{
-			name: "pod has pvcs but these pvc not found",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
-			oldCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-a",
-				},
-			},
-			newCap: &storagev1.CSIStorageCapacity{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-a",
-				},
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{},
-			err:       true,
-			expect:    framework.Queue,
-		},
 	}
 
 	for _, item := range table {
 		t.Run(item.name, func(t *testing.T) {
-			pl := &VolumeBinding{PVCLister: item.pvcLister}
+			pl := &VolumeBinding{}
 			logger, _ := ktesting.NewTestContext(t)
 			qhint, err := pl.isSchedulableAfterCSIStorageCapacityChange(logger, item.pod, item.oldCap, item.newCap)
 			if (err != nil) != item.err {
