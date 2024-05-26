@@ -25,12 +25,10 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/component-helpers/storage/ephemeral"
-	"k8s.io/component-helpers/storage/volume"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config/validation"
@@ -128,7 +126,7 @@ func (pl *VolumeBinding) EventsToRegister() []framework.ClusterEventWithHint {
 }
 
 func (pl *VolumeBinding) isSchedulableAfterStorageClassChange(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (framework.QueueingHint, error) {
-	oldSC, newSC, err := util.As[*storagev1.StorageClass](oldObj, newObj)
+	_, newSC, err := util.As[*storagev1.StorageClass](oldObj, newObj)
 	if err != nil {
 		return framework.Queue, err
 	}
@@ -140,44 +138,14 @@ func (pl *VolumeBinding) isSchedulableAfterStorageClassChange(logger klog.Logger
 	)
 
 	for _, vol := range pod.Spec.Volumes {
-		var pvc *v1.PersistentVolumeClaim
-		switch {
-		case vol.PersistentVolumeClaim != nil:
-			pvcName := vol.PersistentVolumeClaim.ClaimName
-			pvc, err = pl.PVCLister.PersistentVolumeClaims(pod.Namespace).Get(pvcName)
-			if err != nil {
-				return framework.Queue, err
-			}
-		case vol.Ephemeral != nil:
-			pvc = &v1.PersistentVolumeClaim{
-				ObjectMeta: vol.Ephemeral.VolumeClaimTemplate.ObjectMeta,
-				Spec:       vol.Ephemeral.VolumeClaimTemplate.Spec,
-			}
-		default:
-			continue
-		}
-
-		if pvc.Spec.VolumeName != "" {
-			// Skipping the check for CSIStorageCapacity as the PVC is configured
-			// to be bound to an existing PV.
-			continue
-		}
-
-		className := volume.GetPersistentVolumeClaimClass(pvc)
-		if className == newSC.Name {
-			if oldSC == nil {
-				logger.V(4).Info("StorageClass was created")
-				return framework.Queue, nil
-			}
-
-			if !apiequality.Semantic.DeepEqual(newSC.AllowedTopologies, oldSC.AllowedTopologies) {
-				logger.V(4).Info("StorageClass was created or updated, and changed AllowedTopologies", "AllowedTopologies", newSC.AllowedTopologies)
-				return framework.Queue, nil
-			}
+		if vol.PersistentVolumeClaim != nil || vol.Ephemeral != nil {
+			// This Pod might have got unschedulable due to StorageClass in a past scheduling cycle.
+			logger.V(5).Info("StorageClass was created or updated, potentially making the target Pod schedulable")
+			return framework.Queue, nil
 		}
 	}
 
-	logger.V(4).Info("StorageClass was created or updated, but it doesn't make this pod schedulable")
+	logger.V(5).Info("StorageClass was created or updated, but it doesn't make this pod schedulable")
 	return framework.QueueSkip, nil
 }
 

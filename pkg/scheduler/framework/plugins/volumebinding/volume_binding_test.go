@@ -902,23 +902,7 @@ func TestIsSchedulableAfterStorageClassChange(t *testing.T) {
 		expect    framework.QueueingHint
 	}{
 		{
-			name: "pod has no pvcs",
-			pod:  makePod("pod-a").Pod,
-			oldSC: &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-a",
-				},
-			},
-			newSC: &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-a",
-				},
-			},
-			err:    false,
-			expect: framework.QueueSkip,
-		},
-		{
-			name: "pod has no pvc or ephemeral volumes",
+			name: "pod has no pvc or generic ephemeral volumes",
 			pod:  makePod("pod-a").withEmptyDirVolume().Pod,
 			oldSC: &storagev1.StorageClass{
 				ObjectMeta: metav1.ObjectMeta{
@@ -930,79 +914,12 @@ func TestIsSchedulableAfterStorageClassChange(t *testing.T) {
 					Name: "sc-a",
 				},
 			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
-					return *pvc
-				}(),
-			},
 			err:    false,
 			expect: framework.QueueSkip,
 		},
 		{
-			name: "pod has pvc volumes with unchanged storage class",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
-			oldSC: &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-b",
-				},
-			},
-			newSC: &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-b",
-				},
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
-					return *pvc
-				}(),
-			},
-			err:    false,
-			expect: framework.QueueSkip,
-		},
-		{
-			name: "skipping the check for CSIStorageCapacity as the pvc is configured to be bound to an existing pv",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
-			oldSC: nil,
-			newSC: &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-b",
-				},
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-b", "sc-b").withBoundPV("pv-b").PersistentVolumeClaim
-					return *pvc
-				}(),
-			},
-			err:    false,
-			expect: framework.QueueSkip,
-		},
-		{
-			name: "the storage class of the specified by pvc is not found",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
+			name: "pod has one or more pvcs",
+			pod:  makePod("pod-a").withPVCVolume("pvc-a", "").Pod,
 			oldSC: &storagev1.StorageClass{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "sc-a",
@@ -1012,191 +929,22 @@ func TestIsSchedulableAfterStorageClassChange(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "sc-a",
 				},
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-b", "sc-notfound").PersistentVolumeClaim
-					return *pvc
-				}(),
-			},
-			err:    false,
-			expect: framework.QueueSkip,
-		},
-		{
-			name: "pod has pvc that references a newly added storage class",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
-			oldSC: nil,
-			newSC: &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-b",
-				},
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
-					return *pvc
-				}(),
 			},
 			err:    false,
 			expect: framework.Queue,
 		},
 		{
-			name: "pod has ephemeral volume that references a newly added storage class",
-			pod: func() *v1.Pod {
-				pod := makePod("pod-a").Pod
-				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-					Name: "ephemeral-a",
-					VolumeSource: v1.VolumeSource{
-						Ephemeral: &v1.EphemeralVolumeSource{
-							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
-								Spec: makePVC("pod-a-ephemeral-a", "sc-0").PersistentVolumeClaim.Spec,
-							},
-						},
-					},
-				})
-				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-					Name: "ephemeral-b",
-					VolumeSource: v1.VolumeSource{
-						Ephemeral: &v1.EphemeralVolumeSource{
-							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
-								Spec: makePVC("pod-a-ephemeral-b", "sc-a").PersistentVolumeClaim.Spec,
-							},
-						},
-					},
-				})
-				return pod
-			}(),
-			oldSC: nil,
-			newSC: &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-a",
-				},
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{},
-			err:       false,
-			expect:    framework.Queue,
-		},
-		{
-			name: "pod has pvc volumes with changed storage class: AllowedTopologies",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
-			oldSC: &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-b",
-				},
-				AllowedTopologies: []v1.TopologySelectorTerm{
-					{
-						MatchLabelExpressions: []v1.TopologySelectorLabelRequirement{
-							{
-								Key:    "kubernetes.io/hostname",
-								Values: []string{"node1", "node2"},
-							},
-						},
-					},
-				},
-			},
-			newSC: &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-b",
-				},
-				AllowedTopologies: []v1.TopologySelectorTerm{
-					{
-						MatchLabelExpressions: []v1.TopologySelectorLabelRequirement{
-							{
-								Key:    "kubernetes.io/hostname",
-								Values: []string{"node1", "node3"},
-							},
-						},
-					},
-				},
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pvc-b", "sc-b").PersistentVolumeClaim
-					return *pvc
-				}(),
-			},
-			err:    false,
-			expect: framework.Queue,
-		},
-		{
-			name: "pod has ephemeral volumes with changed storage class: AllowedTopologies",
-			pod: func() *v1.Pod {
-				pod := makePod("pod-a").Pod
-				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-					Name: "ephemeral-a",
-					VolumeSource: v1.VolumeSource{
-						Ephemeral: &v1.EphemeralVolumeSource{
-							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
-								Spec: makePVC("pod-a-ephemeral-a", "sc-0").PersistentVolumeClaim.Spec,
-							},
-						},
-					},
-				})
-				pod.Spec.Volumes = append(pod.Spec.Volumes, v1.Volume{
-					Name: "ephemeral-b",
-					VolumeSource: v1.VolumeSource{
-						Ephemeral: &v1.EphemeralVolumeSource{
-							VolumeClaimTemplate: &v1.PersistentVolumeClaimTemplate{
-								Spec: makePVC("pod-a-ephemeral-b", "sc-a").PersistentVolumeClaim.Spec,
-							},
-						},
-					},
-				})
-				return pod
-			}(),
+			name: "pod has one or more generic ephemeral volumes",
+			pod:  makePod("pod-a").withGenericEphemeralVolume("ephemeral-a").Pod,
 			oldSC: &storagev1.StorageClass{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "sc-a",
 				},
-				AllowedTopologies: []v1.TopologySelectorTerm{
-					{
-						MatchLabelExpressions: []v1.TopologySelectorLabelRequirement{
-							{
-								Key:    "kubernetes.io/hostname",
-								Values: []string{"node1", "node2"},
-							},
-						},
-					},
-				},
 			},
 			newSC: &storagev1.StorageClass{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "sc-a",
 				},
-				AllowedTopologies: []v1.TopologySelectorTerm{
-					{
-						MatchLabelExpressions: []v1.TopologySelectorLabelRequirement{
-							{
-								Key:    "kubernetes.io/hostname",
-								Values: []string{"node1", "node3"},
-							},
-						},
-					},
-				},
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{
-				func() v1.PersistentVolumeClaim {
-					pvc := makePVC("pod-a-ephemeral-a", "sc-a").PersistentVolumeClaim
-					return *pvc
-				}(),
 			},
 			err:    false,
 			expect: framework.Queue,
@@ -1207,36 +955,6 @@ func TestIsSchedulableAfterStorageClassChange(t *testing.T) {
 			newSC:  new(struct{}),
 			err:    true,
 			expect: framework.Queue,
-		},
-		{
-			name: "pod has pvcs but these pvc not found",
-			pod: makePod("pod-a").
-				withPVCVolume("pvc-a", "").
-				withPVCVolume("pvc-b", "").
-				Pod,
-			oldSC: &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-a",
-				},
-				AllowedTopologies: []v1.TopologySelectorTerm{
-					{
-						MatchLabelExpressions: []v1.TopologySelectorLabelRequirement{
-							{
-								Key:    "kubernetes.io/hostname",
-								Values: []string{"node1", "node2"},
-							},
-						},
-					},
-				},
-			},
-			newSC: &storagev1.StorageClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "sc-a",
-				},
-			},
-			pvcLister: tf.PersistentVolumeClaimLister{},
-			err:       true,
-			expect:    framework.Queue,
 		},
 	}
 
