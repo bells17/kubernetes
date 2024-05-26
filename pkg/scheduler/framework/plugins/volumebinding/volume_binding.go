@@ -24,7 +24,6 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	corelisters "k8s.io/client-go/listers/core/v1"
@@ -126,7 +125,7 @@ func (pl *VolumeBinding) EventsToRegister() []framework.ClusterEventWithHint {
 }
 
 func (pl *VolumeBinding) isSchedulableAfterPersistentVolumeClaimChange(logger klog.Logger, pod *v1.Pod, oldObj, newObj interface{}) (framework.QueueingHint, error) {
-	oldPVC, newPVC, err := util.As[*v1.PersistentVolumeClaim](oldObj, newObj)
+	_, newPVC, err := util.As[*v1.PersistentVolumeClaim](oldObj, newObj)
 	if err != nil {
 		return framework.Queue, err
 	}
@@ -138,7 +137,7 @@ func (pl *VolumeBinding) isSchedulableAfterPersistentVolumeClaimChange(logger kl
 	)
 
 	if pod.Namespace != newPVC.Namespace {
-		logger.V(4).Info("PersistentVolumeClaim was created or updated, but it doesn't make this pod schedulable")
+		logger.V(5).Info("PersistentVolumeClaim was created or updated, but it doesn't make this pod schedulable")
 		return framework.QueueSkip, nil
 	}
 
@@ -154,29 +153,14 @@ func (pl *VolumeBinding) isSchedulableAfterPersistentVolumeClaimChange(logger kl
 		}
 
 		if pvcName == newPVC.Name {
-			if oldPVC == nil {
-				logger.V(4).Info("PersistentVolumeClaim was created")
-				return framework.Queue, nil
-			}
-
-			if newPVC.Status.Phase != oldPVC.Status.Phase {
-				logger.V(4).Info("PersistentVolumeClaim referenced by the Pod was created or updated, and changed Phase", "Phase", newPVC.Status.Phase)
-				return framework.Queue, nil
-			}
-
-			if !apiequality.Semantic.DeepEqual(newPVC.Annotations, oldPVC.Annotations) {
-				logger.V(4).Info("PersistentVolumeClaim referenced by the Pod was created or updated, and changed Annotations")
-				return framework.Queue, nil
-			}
-
-			if !apiequality.Semantic.DeepEqual(newPVC.Spec, oldPVC.Spec) {
-				logger.V(4).Info("PersistentVolumeClaim referenced by the Pod was created or updated, and changed Spec")
-				return framework.Queue, nil
-			}
+			// Return Queue because, in this case,
+			// all PVC creations and almost all PVC updates could make the Pod schedulable.
+			logger.V(5).Info("PersistentVolumeClaim was created or updated, potentially making the target Pod schedulable")
+			return framework.Queue, nil
 		}
 	}
 
-	logger.V(4).Info("PersistentVolumeClaim was created or updated, but it doesn't make this pod schedulable")
+	logger.V(5).Info("PersistentVolumeClaim was created or updated, but it doesn't make this pod schedulable")
 	return framework.QueueSkip, nil
 }
 
