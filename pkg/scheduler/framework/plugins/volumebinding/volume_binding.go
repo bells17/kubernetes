@@ -140,12 +140,12 @@ func (pl *VolumeBinding) isSchedulableAfterCSIStorageCapacityChange(logger klog.
 	for _, vol := range pod.Spec.Volumes {
 		if vol.PersistentVolumeClaim != nil || vol.Ephemeral != nil {
 			// This Pod might have got unschedulable due to CSIStorageCapacity in a past scheduling cycle.
-			logger.V(5).Info("CSIStorageCapacity was created or updated, potentially making the target Pod schedulable")
+			logger.V(5).Info("CSIStorageCapacity was created or updated, potentially making the target pod schedulable")
 			return framework.Queue, nil
 		}
 	}
 
-	logger.V(5).Info("CSIStorageCapacity was created or updated, but it doesn't make this pod schedulable")
+	logger.V(5).Info("CSIStorageCapacity was created or updated, but the pod doesn’t mount any persistent volumes and generic ephemeral storage volumes. It doesn't make this pod schedulable")
 	return framework.QueueSkip, nil
 }
 

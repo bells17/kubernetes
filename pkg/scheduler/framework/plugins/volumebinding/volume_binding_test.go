@@ -932,7 +932,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "cap-a",
 				},
-				StorageClassName: "sc-b",
+				StorageClassName: "sc-a",
 			},
 			err:    false,
 			expect: framework.Queue,
@@ -950,7 +950,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "cap-a",
 				},
-				StorageClassName: "sc-b",
+				StorageClassName: "sc-a",
 			},
 			err:    false,
 			expect: framework.Queue,
