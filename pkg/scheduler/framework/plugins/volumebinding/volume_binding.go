@@ -137,7 +137,7 @@ func (pl *VolumeBinding) isSchedulableAfterPersistentVolumeClaimChange(logger kl
 	)
 
 	if pod.Namespace != newPVC.Namespace {
-		logger.V(5).Info("PersistentVolumeClaim was created or updated, but it doesn't make this pod schedulable")
+		logger.V(5).Info("PersistentVolumeClaim the pod requires was created or updated, potentially making the target Pod schedulable")
 		return framework.QueueSkip, nil
 	}
 
@@ -155,7 +155,7 @@ func (pl *VolumeBinding) isSchedulableAfterPersistentVolumeClaimChange(logger kl
 		if pvcName == newPVC.Name {
 			// Return Queue because, in this case,
 			// all PVC creations and almost all PVC updates could make the Pod schedulable.
-			logger.V(5).Info("PersistentVolumeClaim was created or updated, potentially making the target Pod schedulable")
+			logger.V(5).Info("PersistentVolumeClaim the pod requires was created or updated, potentially making the target Pod schedulable")
 			return framework.Queue, nil
 		}
 	}
