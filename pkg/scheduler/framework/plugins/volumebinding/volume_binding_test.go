@@ -894,12 +894,12 @@ func TestVolumeBinding(t *testing.T) {
 
 func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 	table := []struct {
-		name   string
-		pod    *v1.Pod
-		oldCap interface{}
-		newCap interface{}
-		err    bool
-		expect framework.QueueingHint
+		name    string
+		pod     *v1.Pod
+		oldCap  interface{}
+		newCap  interface{}
+		wantErr bool
+		expect  framework.QueueingHint
 	}{
 		{
 			name: "pod has no pvc or generic ephemeral volumes",
@@ -916,8 +916,8 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				},
 				StorageClassName: "sc-a",
 			},
-			err:    false,
-			expect: framework.QueueSkip,
+			wantErr: false,
+			expect:  framework.QueueSkip,
 		},
 		{
 			name: "pod has one or more pvcs",
@@ -934,8 +934,8 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				},
 				StorageClassName: "sc-a",
 			},
-			err:    false,
-			expect: framework.Queue,
+			wantErr: false,
+			expect:  framework.Queue,
 		},
 		{
 			name: "pod has one or more generic ephemeral volumes",
@@ -952,15 +952,36 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 				},
 				StorageClassName: "sc-a",
 			},
-			err:    false,
-			expect: framework.Queue,
+			wantErr: false,
+			expect:  framework.Queue,
 		},
 		{
-			name:   "type conversion error",
-			oldCap: new(struct{}),
-			newCap: new(struct{}),
-			err:    true,
-			expect: framework.Queue,
+			name: "pod has pvcs & generic ephemeral volumes",
+			pod: makePod("pod-a").
+				withPVCVolume("pvc-a", "").
+				withGenericEphemeralVolume("ephemeral-a").
+				Pod,
+			oldCap: &storagev1.CSIStorageCapacity{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "cap-a",
+				},
+				StorageClassName: "sc-a",
+			},
+			newCap: &storagev1.CSIStorageCapacity{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "cap-a",
+				},
+				StorageClassName: "sc-a",
+			},
+			wantErr: false,
+			expect:  framework.Queue,
+		},
+		{
+			name:    "type conversion error",
+			oldCap:  new(struct{}),
+			newCap:  new(struct{}),
+			wantErr: true,
+			expect:  framework.Queue,
 		},
 	}
 
@@ -969,7 +990,7 @@ func TestIsSchedulableAfterCSIStorageCapacityChange(t *testing.T) {
 			pl := &VolumeBinding{}
 			logger, _ := ktesting.NewTestContext(t)
 			qhint, err := pl.isSchedulableAfterCSIStorageCapacityChange(logger, item.pod, item.oldCap, item.newCap)
-			if (err != nil) != item.err {
+			if (err != nil) != item.wantErr {
 				t.Errorf("isSchedulableAfterCSIStorageCapacityChange failed - got: %q", err)
 			}
 			if qhint != item.expect {
