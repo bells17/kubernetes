@@ -98,9 +98,24 @@ func (pl *VolumeBinding) EventsToRegister() []framework.ClusterEventWithHint {
 		// (e.g., allowedTopologies, volumeBindingMode), and hence may become
 		// schedulable upon StorageClass Add or Update events.
 		{Event: framework.ClusterEvent{Resource: framework.StorageClass, ActionType: framework.Add | framework.Update}},
+
 		// We bind PVCs with PVs, so any changes may make the pods schedulable.
+		// QHintFn is added only for PersistentVolumeClaim because:
+		// 1. QHintFn is performance-sensitive, and we want to avoid heavy processing.
+		// 2. For resources other than PVC, we need to retrieve PVCs from
+		//		Pod changes and check if the target resource (e.g., StorageClass, CSICapacity) is used,
+		// 		which can be a heavy process.
+		// 3. For PVC, we can obtain the PVC name from spec.Volumes in the Pod.
+		//    This allows us to determine if the Pod is using the target PVC without using PVC resource.
+		//    By doing this, we can filter out unnecessary rescheduling of Pods that are not related to
+		//		the target PVC, which is why we add QueueingHintFn for only PVC.
+		// 4. Moreover, the volumebinding plugin does not return an Unschedule status
+		// 		in the Filter phase if spec.Volumes is not set in the Pod.
+		// 		Therefore, there is no need to implement a QHintFn solely to check
+		// 		whether the Pod has spec.Volumes for resources like StorageClass or CSICapacity.
 		{Event: framework.ClusterEvent{Resource: framework.PersistentVolumeClaim, ActionType: framework.Add | framework.Update}, QueueingHintFn: pl.isSchedulableAfterPersistentVolumeClaimChange},
 		{Event: framework.ClusterEvent{Resource: framework.PersistentVolume, ActionType: framework.Add | framework.Update}},
+
 		// Pods may fail to find available PVs because the node labels do not
 		// match the storage class's allowed topologies or PV's node affinity.
 		// A new or updated node may make pods schedulable.
@@ -114,8 +129,10 @@ func (pl *VolumeBinding) EventsToRegister() []framework.ClusterEventWithHint {
 		// We can remove UpdateNodeTaint when we remove the preCheck feature.
 		// See: https://github.com/kubernetes/kubernetes/issues/110175
 		{Event: framework.ClusterEvent{Resource: framework.Node, ActionType: framework.Add | framework.UpdateNodeLabel | framework.UpdateNodeTaint}},
+
 		// We rely on CSI node to translate in-tree PV to CSI.
 		{Event: framework.ClusterEvent{Resource: framework.CSINode, ActionType: framework.Add | framework.Update}},
+
 		// When CSIStorageCapacity is enabled, pods may become schedulable
 		// on CSI driver & storage capacity changes.
 		{Event: framework.ClusterEvent{Resource: framework.CSIDriver, ActionType: framework.Add | framework.Update}},
@@ -137,7 +154,7 @@ func (pl *VolumeBinding) isSchedulableAfterPersistentVolumeClaimChange(logger kl
 	)
 
 	if pod.Namespace != newPVC.Namespace {
-		logger.V(5).Info("PersistentVolumeClaim the pod requires was created or updated, potentially making the target Pod schedulable")
+		logger.V(5).Info("PersistentVolumeClaim was created or updated, but it doesn't make this pod schedulable because the PVC belongs to a different namespace")
 		return framework.QueueSkip, nil
 	}
 
